@@ -65,7 +65,7 @@ unsigned long modeSwitchTime = 0;
 const unsigned long MODE_SWITCH_INTERVAL = 30000; // Switch modes every 30 seconds
 
 // Temporary test mode - set to true to force rain display for testing
-const bool TEST_RAIN_MODE = false; // DISABLED - testing temperature display only
+const bool TEST_RAIN_MODE = true; // Set to false to disable after testing
 unsigned long testRainStartTime = 0;
 const unsigned long TEST_RAIN_DURATION = 15000; // Show rain for 15 seconds
 
@@ -429,29 +429,52 @@ void loop() {
   }
   
   // Switch between temperature and rain display
-  // DISABLED: Rain display temporarily disabled for temperature testing
-  // if (millis() - modeSwitchTime > MODE_SWITCH_INTERVAL) {
-  //   if (displayMode == 0 && isRaining) {
-  //     displayMode = 1; // Switch to rain
-  //     Serial.println("Switching to rain display");
-  //   } else {
-  //     displayMode = 0; // Switch to temperature
-  //     Serial.println("Switching to temperature display");
-  //   }
-  //   modeSwitchTime = millis();
-  // }
+  static int lastDisplayMode = -1; // Track mode changes
+  if (millis() - modeSwitchTime > MODE_SWITCH_INTERVAL) {
+    if (displayMode == 0 && isRaining) {
+      displayMode = 1; // Switch to rain
+      Serial.println("Switching to rain display");
+    } else {
+      displayMode = 0; // Switch to temperature
+      Serial.println("Switching to temperature display");
+    }
+    modeSwitchTime = millis();
+  }
   
-  // Display based on current mode - FORCE TEMPERATURE ONLY
-  displayMode = 0; // Always show temperature
-  displayTemperature();
-  // DISABLED: Rain display temporarily disabled
-  // if (displayMode == 0) {
-  //   displayTemperature();
-  // } else if (displayMode == 1 && isRaining) {
-  //   displayRain();
-  // } else {
-  //   displayTemperature(); // Fallback to temperature if not raining
-  // }
+  // Clear and reset state when switching modes to prevent conflicts
+  if (lastDisplayMode != displayMode) {
+    FastLED.clear();
+    FastLED.show();
+    // Reset temperature display state when switching away from it
+    if (lastDisplayMode == 0 && displayMode == 1) {
+      // Switching from temp to rain - reset temp state
+      tempDisplayState = 0;
+      tempCurrentStack = 0;
+      tempPMax = 0;
+      tempInitialized = false;
+    }
+    // Reset rain state when switching away from it
+    if (lastDisplayMode == 1 && displayMode == 0) {
+      // Switching from rain to temp - reset rain state
+      pMax = 0;
+      george = 0;
+      for(int i = 0; i < NUM_BALLS; i++) {
+        tLast[i] = millis();
+        h[i] = 0;
+        COR[i] = random(2, 12);
+      }
+    }
+    lastDisplayMode = displayMode;
+  }
+  
+  // Display based on current mode
+  if (displayMode == 0) {
+    displayTemperature();
+  } else if (displayMode == 1 && isRaining) {
+    displayRain();
+  } else {
+    displayTemperature(); // Fallback to temperature if not raining
+  }
   
   delay(50);
 }
