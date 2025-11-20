@@ -65,7 +65,7 @@ unsigned long modeSwitchTime = 0;
 const unsigned long MODE_SWITCH_INTERVAL = 30000; // Switch modes every 30 seconds
 
 // Temporary test mode - set to true to force rain display for testing
-const bool TEST_RAIN_MODE = true; // Set to false to disable after testing
+const bool TEST_RAIN_MODE = false; // DISABLED - testing temperature display only
 unsigned long testRainStartTime = 0;
 const unsigned long TEST_RAIN_DURATION = 15000; // Show rain for 15 seconds
 
@@ -429,25 +429,29 @@ void loop() {
   }
   
   // Switch between temperature and rain display
-  if (millis() - modeSwitchTime > MODE_SWITCH_INTERVAL) {
-    if (displayMode == 0 && isRaining) {
-      displayMode = 1; // Switch to rain
-      Serial.println("Switching to rain display");
-    } else {
-      displayMode = 0; // Switch to temperature
-      Serial.println("Switching to temperature display");
-    }
-    modeSwitchTime = millis();
-  }
+  // DISABLED: Rain display temporarily disabled for temperature testing
+  // if (millis() - modeSwitchTime > MODE_SWITCH_INTERVAL) {
+  //   if (displayMode == 0 && isRaining) {
+  //     displayMode = 1; // Switch to rain
+  //     Serial.println("Switching to rain display");
+  //   } else {
+  //     displayMode = 0; // Switch to temperature
+  //     Serial.println("Switching to temperature display");
+  //   }
+  //   modeSwitchTime = millis();
+  // }
   
-  // Display based on current mode
-  if (displayMode == 0) {
-    displayTemperature();
-  } else if (displayMode == 1 && isRaining) {
-    displayRain();
-  } else {
-    displayTemperature(); // Fallback to temperature if not raining
-  }
+  // Display based on current mode - FORCE TEMPERATURE ONLY
+  displayMode = 0; // Always show temperature
+  displayTemperature();
+  // DISABLED: Rain display temporarily disabled
+  // if (displayMode == 0) {
+  //   displayTemperature();
+  // } else if (displayMode == 1 && isRaining) {
+  //   displayRain();
+  // } else {
+  //   displayTemperature(); // Fallback to temperature if not raining
+  // }
   
   delay(50);
 }
@@ -607,7 +611,7 @@ void displayTemperature() {
     tempDisplayState = 0;
     tempCurrentStack = 0;
     tempPMax = 0;
-    tempTLast = 0; // Reset timer
+    tempTLast = millis(); // FIX: Set to current time, not 0
     tempBouncing = false; // Reset bounce state
     tempBounceVelocity = 0;
     tempBounceHeight = 0;
@@ -883,6 +887,20 @@ void displayTemperature() {
   }
   // Done displaying, hold for a bit then reset
   else if (tempDisplayState == 2) {
+    // Continue to display the final stacked state with all green markers
+    FastLED.clear();
+    
+    // Draw all stacked LEDs (blue background)
+    for(int j = 0; j < tempPMax && j < NUM_LEDS; j++) {
+      leds[j] = CRGB(0, 0, 250); // Blue background
+    }
+    // Green markers every 5 LEDs (keep all visible)
+    for(int j = 0; j < tempPMax && j < NUM_LEDS; j += 5) {
+      leds[j] = CRGB(0, 255, 0); // Green marker
+    }
+    
+    FastLED.show();
+    
     if (millis() - tempStateTime > 3000) {
       // Reset for next cycle
       tempDisplayState = 0;
