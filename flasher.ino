@@ -59,10 +59,13 @@ float george = 0;
 const int RAIN_LED_COUNT = 60; // Use bottom 60 LEDs for rain (matching original)
 const float RAIN_TIME_SCALE = 5000.0; // Larger value slows raindrops (doubled again to slow by 1/2)
 
-// Display mode: 0 = temperature, 1 = rain
-int displayMode = 0;
+// Display mode: 0 = temperature, 1 = rain, 2 = color palette
+int displayMode = 2; // Start with color palette
 unsigned long modeSwitchTime = 0;
-const unsigned long MODE_SWITCH_INTERVAL = 30000; // Switch modes every 30 seconds
+const unsigned long TEMP_DISPLAY_INTERVAL = 120000; // Show temp twice every 2 minutes (120 seconds)
+const unsigned long TEMP_DISPLAY_DURATION = 30000; // Show temp for 30 seconds each time
+int tempDisplayCount = 0; // Track how many temp displays in current cycle
+unsigned long lastTempCycleStart = 0;
 
 // Temporary test mode - set to true to force rain display for testing
 const bool TEST_RAIN_MODE = true; // Set to false to disable after testing
@@ -92,6 +95,16 @@ int tempBounceCount = 0; // Number of bounces
 const float BOUNCE_COEFFICIENT = 0.6f; // Bounce energy retention (0.6 = loses 40% each bounce)
 const float BOUNCE_DAMPING = 0.8f; // Additional damping factor
 const int MAX_BOUNCES = 3; // Maximum number of bounces before settling
+
+// Color palette display variables
+unsigned long paletteStartTime = 0;
+int currentPaletteIndex = 0;
+int targetPaletteIndex = 0;
+float paletteBlendProgress = 0.0;
+const float PALETTE_TRANSITION_SPEED = 0.0001; // Slow transition (adjust for speed)
+unsigned long lastPaletteChange = 0;
+const unsigned long PALETTE_CHANGE_INTERVAL = 120000; // Change palette every 2 minutes
+int paletteOffset = 0; // For animation
 
 // Function to load settings from preferences
 void loadSettings() {
@@ -428,34 +441,67 @@ void loop() {
     }
   }
   
-  // Switch between temperature and rain display
-  static int lastDisplayMode = -1; // Track mode changes
-  if (millis() - modeSwitchTime > MODE_SWITCH_INTERVAL) {
-    if (displayMode == 0 && isRaining) {
-      displayMode = 1; // Switch to rain
-      Serial.println("Switching to rain display");
-    } else {
-      displayMode = 0; // Switch to temperature
-      Serial.println("Switching to temperature display");
+  // Mode management: Show temp twice every 2 minutes, color palette the rest of the time
+  unsigned long currentTime = millis();
+  
+  // Initialize lastTempCycleStart on first run
+  static bool cycleInitialized = false;
+  if (!cycleInitialized) {
+    lastTempCycleStart = currentTime;
+    cycleInitialized = true;
+  }
+  
+  // Check if it's time for temperature display cycle (every 2 minutes)
+  if (currentTime - lastTempCycleStart >= TEMP_DISPLAY_INTERVAL) {
+    // Start new temperature cycle
+    lastTempCycleStart = currentTime;
+    tempDisplayCount = 0;
+    modeSwitchTime = currentTime;
+    displayMode = 0; // Switch to temperature
+    Serial.println("Starting temperature display cycle");
+  }
+  
+  // If in temperature mode, check if we've shown it twice
+  if (displayMode == 0) {
+    if (tempDisplayCount < 2) {
+      // Still showing temperature
+      if (currentTime - modeSwitchTime > TEMP_DISPLAY_DURATION) {
+        // Done with this temp display, show next one or switch to palette
+        tempDisplayCount++;
+        if (tempDisplayCount < 2) {
+          // Show temp again (second time)
+          modeSwitchTime = currentTime;
+          tempDisplayState = 0; // Reset temp state for second display
+          tempCurrentStack = 0;
+          tempPMax = 0;
+          tempInitialized = false;
+          Serial.println("Showing temperature display again (2nd time)");
+        } else {
+          // Done with both temp displays, switch to color palette
+          displayMode = 2;
+          modeSwitchTime = currentTime;
+          FastLED.clear();
+          FastLED.show();
+          Serial.println("Switching to color palette display");
+        }
+      }
     }
-    modeSwitchTime = millis();
   }
   
   // Clear and reset state when switching modes to prevent conflicts
+  static int lastDisplayMode = -1;
   if (lastDisplayMode != displayMode) {
     FastLED.clear();
     FastLED.show();
     // Reset temperature display state when switching away from it
-    if (lastDisplayMode == 0 && displayMode == 1) {
-      // Switching from temp to rain - reset temp state
+    if (lastDisplayMode == 0) {
       tempDisplayState = 0;
       tempCurrentStack = 0;
       tempPMax = 0;
       tempInitialized = false;
     }
     // Reset rain state when switching away from it
-    if (lastDisplayMode == 1 && displayMode == 0) {
-      // Switching from rain to temp - reset rain state
+    if (lastDisplayMode == 1) {
       pMax = 0;
       george = 0;
       for(int i = 0; i < NUM_BALLS; i++) {
@@ -472,8 +518,10 @@ void loop() {
     displayTemperature();
   } else if (displayMode == 1 && isRaining) {
     displayRain();
+  } else if (displayMode == 2) {
+    displayColorPalette();
   } else {
-    displayTemperature(); // Fallback to temperature if not raining
+    displayColorPalette(); // Fallback to color palette
   }
   
   delay(50);
@@ -1096,4 +1144,310 @@ void displayRain() {
   }
   
   delay(50);
+}
+
+// Color palette definitions (cool blues and blacks)
+DEFINE_GRADIENT_PALETTE(blueBlack1_gp){
+    0,   0,   0,   0,  // Black
+   64,   0,  20,  40,  // Dark blue
+  128,   0,  50, 100,  // Medium blue
+  192,   0,  80, 150,  // Bright blue
+  255,   0, 100, 200   // Light blue
+};
+
+DEFINE_GRADIENT_PALETTE(blueBlack2_gp){
+    0,   0,   0,   0,  // Black
+   64,   0,  10,  30,  // Very dark blue
+  128,   0,  40,  80,  // Dark blue
+  192,   0,  70, 130,  // Medium blue
+  255,   0, 120, 180   // Bright blue
+};
+
+DEFINE_GRADIENT_PALETTE(blueBlack3_gp){
+    0,   0,   0,   0,  // Black
+   32,   0,   5,  15,  // Very dark
+   96,   0,  30,  60,  // Dark blue
+  160,   0,  60, 120,  // Medium blue
+  224,   0,  90, 160,  // Bright blue
+  255,   0, 110, 200   // Light blue
+};
+
+DEFINE_GRADIENT_PALETTE(blueBlack4_gp){
+    0,   0,   0,   0,  // Black
+   85,   0,  15,  35,  // Dark blue
+  170,   0,  45,  90,  // Medium blue
+  255,   0,  75, 140   // Bright blue
+};
+
+DEFINE_GRADIENT_PALETTE(blueBlack5_gp){
+    0,   0,   0,   0,  // Black
+   51,   0,  25,  50,  // Dark blue
+  102,   0,  50, 100,  // Medium blue
+  153,   0,  75, 150,  // Bright blue
+  204,   0, 100, 180,  // Light blue
+  255,   0, 120, 200   // Very light blue
+};
+
+DEFINE_GRADIENT_PALETTE(blueBlack6_gp){
+    0,   0,   0,   0,  // Black
+   42,   0,  10,  25,  // Very dark blue
+   85,   0,  30,  60,  // Dark blue
+  128,   0,  55, 110,  // Medium blue
+  170,   0,  80, 150,  // Bright blue
+  213,   0, 100, 180,  // Light blue
+  255,   0, 115, 200   // Very light blue
+};
+
+DEFINE_GRADIENT_PALETTE(blueBlack7_gp){
+    0,   0,   0,   0,  // Black
+   36,   0,   8,  20,  // Very dark
+   73,   0,  20,  45,  // Dark blue
+  109,   0,  40,  85,  // Medium-dark blue
+  146,   0,  65, 130,  // Medium blue
+  182,   0,  85, 160,  // Bright blue
+  219,   0, 105, 190,  // Light blue
+  255,   0, 125, 210   // Very light blue
+};
+
+DEFINE_GRADIENT_PALETTE(blueBlack8_gp){
+    0,   0,   0,   0,  // Black
+   32,   0,  12,  30,  // Dark blue
+   64,   0,  25,  55,  // Medium-dark blue
+   96,   0,  40,  85,  // Medium blue
+  128,   0,  60, 120,  // Bright blue
+  160,   0,  80, 150,  // Light blue
+  192,   0, 100, 180,  // Very light blue
+  224,   0, 115, 200,  // Brightest blue
+  255,   0, 130, 220   // Maximum blue
+};
+
+// Dark forest green palettes
+DEFINE_GRADIENT_PALETTE(greenBlack1_gp){
+    0,   0,   0,   0,  // Black
+   64,   0,  20,   5,  // Dark forest green
+  128,   0,  50,  15,  // Medium forest green
+  192,   0,  80,  25,  // Bright forest green
+  255,   0, 100,  35   // Light forest green
+};
+
+DEFINE_GRADIENT_PALETTE(greenBlack2_gp){
+    0,   0,   0,   0,  // Black
+   64,   0,  15,   8,  // Very dark forest green
+  128,   0,  40,  18,  // Dark forest green
+  192,   0,  70,  28,  // Medium forest green
+  255,   0, 100,  40   // Bright forest green
+};
+
+DEFINE_GRADIENT_PALETTE(greenBlack3_gp){
+    0,   0,   0,   0,  // Black
+   32,   0,   8,   3,  // Very dark
+   96,   0,  30,  12,  // Dark forest green
+  160,   0,  60,  22,  // Medium forest green
+  224,   0,  90,  32,  // Bright forest green
+  255,   0, 110,  42   // Light forest green
+};
+
+DEFINE_GRADIENT_PALETTE(greenBlack4_gp){
+    0,   0,   0,   0,  // Black
+   85,   0,  18,   8,  // Dark forest green
+  170,   0,  45,  18,  // Medium forest green
+  255,   0,  75,  30   // Bright forest green
+};
+
+DEFINE_GRADIENT_PALETTE(greenBlack5_gp){
+    0,   0,   0,   0,  // Black
+   51,   0,  25,  10,  // Dark forest green
+  102,   0,  50,  20,  // Medium forest green
+  153,   0,  75,  30,  // Bright forest green
+  204,   0, 100,  40,  // Light forest green
+  255,   0, 120,  50   // Very light forest green
+};
+
+DEFINE_GRADIENT_PALETTE(greenBlack6_gp){
+    0,   0,   0,   0,  // Black
+   42,   0,  12,   5,  // Very dark forest green
+   85,   0,  30,  12,  // Dark forest green
+  128,   0,  55,  22,  // Medium forest green
+  170,   0,  80,  32,  // Bright forest green
+  213,   0, 100,  42,  // Light forest green
+  255,   0, 115,  52   // Very light forest green
+};
+
+DEFINE_GRADIENT_PALETTE(greenBlack7_gp){
+    0,   0,   0,   0,  // Black
+   36,   0,  10,   4,  // Very dark
+   73,   0,  22,  10,  // Dark forest green
+  109,   0,  40,  18,  // Medium-dark forest green
+  146,   0,  65,  28,  // Medium forest green
+  182,   0,  85,  38,  // Bright forest green
+  219,   0, 105,  48,  // Light forest green
+  255,   0, 125,  58   // Very light forest green
+};
+
+DEFINE_GRADIENT_PALETTE(greenBlack8_gp){
+    0,   0,   0,   0,  // Black
+   32,   0,  14,   6,  // Dark forest green
+   64,   0,  28,  12,  // Medium-dark forest green
+   96,   0,  42,  18,  // Medium forest green
+  128,   0,  60,  26,  // Bright forest green
+  160,   0,  80,  36,  // Light forest green
+  192,   0, 100,  46,  // Very light forest green
+  224,   0, 115,  56,  // Brightest forest green
+  255,   0, 130,  66   // Maximum forest green
+};
+
+// Array of palette pointers - blues first (0-7), then greens (8-15)
+CRGBPalette16 palettes[] = {
+  blueBlack1_gp,   // 0
+  blueBlack2_gp,   // 1
+  blueBlack3_gp,   // 2
+  blueBlack4_gp,   // 3
+  blueBlack5_gp,   // 4
+  blueBlack6_gp,   // 5
+  blueBlack7_gp,   // 6
+  blueBlack8_gp,   // 7
+  greenBlack1_gp,  // 8
+  greenBlack2_gp,  // 9
+  greenBlack3_gp,  // 10
+  greenBlack4_gp,  // 11
+  greenBlack5_gp,  // 12
+  greenBlack6_gp,  // 13
+  greenBlack7_gp,  // 14
+  greenBlack8_gp   // 15
+};
+const int NUM_PALETTES = 16;
+const int NUM_BLUE_PALETTES = 8;
+const int NUM_GREEN_PALETTES = 8;
+
+void displayColorPalette() {
+  static unsigned long lastPaletteChange = 0;
+  static int currentPaletteIndex = 0;
+  static int targetPaletteIndex = 0;
+  static float paletteBlendProgress = 0.0;
+  static int paletteOffset = 0;
+  static bool initialized = false;
+  
+  unsigned long currentTime = millis();
+  
+  // Track palette type (blue or green) for complex alternation
+  static bool isBlue = true; // Track current color family
+  static int sequenceCount = 0; // For complex patterns
+  
+  // Initialize on first call
+  if (!initialized) {
+    lastPaletteChange = currentTime;
+    // Randomly start with blue or green
+    isBlue = random(2) == 0;
+    if (isBlue) {
+      currentPaletteIndex = random(0, NUM_BLUE_PALETTES);
+    } else {
+      currentPaletteIndex = random(NUM_BLUE_PALETTES, NUM_PALETTES);
+    }
+    targetPaletteIndex = currentPaletteIndex;
+    paletteBlendProgress = 0.0;
+    initialized = true;
+  }
+  
+  // Slowly change palette every 2 minutes with complex alternation
+  if (currentTime - lastPaletteChange > PALETTE_CHANGE_INTERVAL) {
+    sequenceCount++;
+    
+    // Complex alternation pattern:
+    // - 40% chance: Stay in same color family, move to next palette
+    // - 35% chance: Switch color family (blue<->green)
+    // - 15% chance: Jump within same color family randomly
+    // - 10% chance: Complete random jump (any palette)
+    
+    int randChoice = random(100);
+    
+    if (randChoice < 40) {
+      // Stay in same color family, move to next palette
+      if (isBlue) {
+        targetPaletteIndex = (currentPaletteIndex + 1) % NUM_BLUE_PALETTES;
+      } else {
+        targetPaletteIndex = ((currentPaletteIndex + 1 - NUM_BLUE_PALETTES) % NUM_GREEN_PALETTES) + NUM_BLUE_PALETTES;
+      }
+    } else if (randChoice < 75) {
+      // Switch color family
+      isBlue = !isBlue;
+      if (isBlue) {
+        // Switch to blue - pick a random blue palette
+        targetPaletteIndex = random(0, NUM_BLUE_PALETTES);
+      } else {
+        // Switch to green - pick a random green palette
+        targetPaletteIndex = random(NUM_BLUE_PALETTES, NUM_PALETTES);
+      }
+    } else if (randChoice < 90) {
+      // Jump randomly within same color family
+      if (isBlue) {
+        targetPaletteIndex = random(0, NUM_BLUE_PALETTES);
+      } else {
+        targetPaletteIndex = random(NUM_BLUE_PALETTES, NUM_PALETTES);
+      }
+      // Make sure it's different from current
+      while (targetPaletteIndex == currentPaletteIndex) {
+        if (isBlue) {
+          targetPaletteIndex = random(0, NUM_BLUE_PALETTES);
+        } else {
+          targetPaletteIndex = random(NUM_BLUE_PALETTES, NUM_PALETTES);
+        }
+      }
+    } else {
+      // Complete random jump (any palette)
+      targetPaletteIndex = random(0, NUM_PALETTES);
+      // Update color family based on selected palette
+      isBlue = (targetPaletteIndex < NUM_BLUE_PALETTES);
+      // Make sure it's different from current
+      while (targetPaletteIndex == currentPaletteIndex) {
+        targetPaletteIndex = random(0, NUM_PALETTES);
+        isBlue = (targetPaletteIndex < NUM_BLUE_PALETTES);
+      }
+    }
+    
+    paletteBlendProgress = 0.0;
+    lastPaletteChange = currentTime;
+    Serial.print("Transitioning to palette ");
+    Serial.print(targetPaletteIndex);
+    Serial.print(" (");
+    Serial.print(isBlue ? "blue" : "green");
+    Serial.println(")");
+  }
+  
+  // Smoothly blend between palettes
+  if (currentPaletteIndex != targetPaletteIndex) {
+    paletteBlendProgress += PALETTE_TRANSITION_SPEED;
+    if (paletteBlendProgress >= 1.0) {
+      paletteBlendProgress = 1.0;
+      currentPaletteIndex = targetPaletteIndex;
+    }
+  }
+  
+  // Animate palette offset for slow movement
+  paletteOffset = (paletteOffset + 1) % 256;
+  
+  // Blend the two palettes
+  CRGBPalette16 currentPalette = palettes[currentPaletteIndex];
+  CRGBPalette16 targetPalette = palettes[targetPaletteIndex];
+  
+  // Fill LEDs with blended palette colors
+  for(int i = 0; i < NUM_LEDS; i++) {
+    // Add slow randomness: slight variation in position
+    int position = (i * 8 + paletteOffset + random(-2, 3)) % 256;
+    position = constrain(position, 0, 255);
+    
+    // Get colors from both palettes
+    CRGB color1 = ColorFromPalette(currentPalette, position, 255, LINEARBLEND);
+    CRGB color2 = ColorFromPalette(targetPalette, position, 255, LINEARBLEND);
+    
+    // Blend between them
+    leds[i] = blend(color1, color2, (uint8_t)(paletteBlendProgress * 255));
+    
+    // Add subtle random variation for texture (very subtle)
+    if (random(100) < 5) { // 5% chance
+      leds[i].fadeToBlackBy(random(5, 15)); // Slight darkening
+    }
+  }
+  
+  FastLED.show();
+  delay(30); // Smooth animation
 }
