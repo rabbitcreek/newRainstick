@@ -59,6 +59,13 @@ float george = 0;
 const int RAIN_LED_COUNT = 60; // Use bottom 60 LEDs for rain (matching original)
 const float RAIN_TIME_SCALE = 5000.0; // Larger value slows raindrops (doubled again to slow by 1/2)
 
+// Rain bounce variables
+bool rainBouncing[NUM_BALLS] = {false, false, false, false, false, false};
+float rainBounceVelocity[NUM_BALLS] = {0, 0, 0, 0, 0, 0};
+float rainBounceHeight[NUM_BALLS] = {0, 0, 0, 0, 0, 0};
+unsigned long rainBounceStartTime[NUM_BALLS] = {0, 0, 0, 0, 0, 0};
+const float RAIN_BOUNCE_COEFFICIENT = 0.25f; // Bounce energy retention for rain (smaller bounce)
+
 // Display mode: 0 = temperature, 1 = rain, 2 = color palette
 int displayMode = 2; // Start with color palette
 unsigned long modeSwitchTime = 0;
@@ -523,11 +530,15 @@ void loop() {
     // Reset rain state when switching away from it
     // NOTE: pMax and george are NOT reset - they persist so water level accumulates
     if (lastDisplayMode == 1) {
-      // Only reset drop positions, keep pMax and george for accumulation
+      // Only reset drop positions and bounce states, keep pMax and george for accumulation
       for(int i = 0; i < NUM_BALLS; i++) {
         tLast[i] = millis();
         h[i] = 0;
         COR[i] = random(2, 12);
+        rainBouncing[i] = false;
+        rainBounceVelocity[i] = 0;
+        rainBounceHeight[i] = 0;
+        rainBounceStartTime[i] = 0;
       }
     }
     // Reset palette state when switching TO palette mode (force re-initialization)
@@ -1182,35 +1193,74 @@ void testRainDisplay() {
 }
 
 void displayRain() {
-  // Rain animation matching original rainstorm() function (no bounce)
+  // Rain animation with single bounce when hitting water
   for(int i = 0; i < NUM_BALLS; i++) {
-    tCycle[i] = millis() - tLast[i];
-    h[i] = 0.5 * GRAVITY[i] * pow(tCycle[i] / RAIN_TIME_SCALE, 2.0);
-    // Drops fall from top down to bottom (matching original: pos = (60 - round(h*60)) - COR)
-    // Scaled for 150 LEDs: use NUM_LEDS instead of 60
-    pos[i] = (NUM_LEDS - (round(h[i] * NUM_LEDS))) - COR[i];
-    
-    // Ensure position is within valid range
-    if (pos[i] < 0) {
-      pos[i] = 0;
-    }
-    if (pos[i] >= NUM_LEDS) {
-      pos[i] = NUM_LEDS - 1;
-    }
-    
-    // Check if drop hits water level - if so, reset and add to water
-    // Only reset if position is actually at or below water level
-    if (pos[i] <= pMax && pos[i] >= 0) {
-      tLast[i] = millis();
-      george = george + 1;
-      pMax = round(george / 10);
+    if (!rainBouncing[i]) {
+      // Drop is falling
+      tCycle[i] = millis() - tLast[i];
+      h[i] = 0.5 * GRAVITY[i] * pow(tCycle[i] / RAIN_TIME_SCALE, 2.0);
+      // Drops fall from top down to bottom (matching original: pos = (60 - round(h*60)) - COR)
+      // Scaled for 150 LEDs: use NUM_LEDS instead of 60
+      pos[i] = (NUM_LEDS - (round(h[i] * NUM_LEDS))) - COR[i];
       
-      // Reset drop to top for next fall
-      h[i] = 0;
-      COR[i] = random(2, 12);
-      // Set position to top for next frame
-      pos[i] = NUM_LEDS - 1 - COR[i];
-      if (pos[i] < 0) pos[i] = NUM_LEDS - 1;
+      // Ensure position is within valid range
+      if (pos[i] < 0) {
+        pos[i] = 0;
+      }
+      if (pos[i] >= NUM_LEDS) {
+        pos[i] = NUM_LEDS - 1;
+      }
+      
+      // Check if drop hits water level - if so, start bounce
+      if (pos[i] <= pMax && pos[i] >= 0) {
+        // Calculate impact velocity for bounce
+        float impactVelocity = GRAVITY[i] * (tCycle[i] / RAIN_TIME_SCALE) * NUM_LEDS; // Velocity in LED units per second
+        rainBounceVelocity[i] = impactVelocity * RAIN_BOUNCE_COEFFICIENT; // Initial bounce velocity
+        rainBounceHeight[i] = 0;
+        rainBounceStartTime[i] = millis();
+        rainBouncing[i] = true;
+        pos[i] = pMax; // Set to water level
+        
+        // Add to water level
+        george = george + 1;
+        pMax = round(george / 10);
+      }
+    } else {
+      // Drop is bouncing
+      float bounceTime = (millis() - rainBounceStartTime[i]) / 1000.0;
+      
+      // Physics: h = v0*t - 0.5*g*t^2 (upward motion, then gravity pulls down)
+      // Use average gravity for bounce calculation
+      float avgGravity = 1.0; // Average of GRAVITY array
+      rainBounceHeight[i] = rainBounceVelocity[i] * bounceTime - 0.5 * avgGravity * NUM_LEDS * pow(bounceTime, 2.0);
+      
+      // Convert bounce height to LED position offset
+      int bounceOffset = (int)rainBounceHeight[i];
+      // Limit upward bounce height so drops don't shoot too far up
+      if (bounceOffset > 10) bounceOffset = 10;
+      if (bounceOffset < -10) bounceOffset = -10;
+      pos[i] = pMax + bounceOffset;
+      
+      // Ensure tempPos doesn't go out of bounds
+      if (pos[i] < 0) pos[i] = 0;
+      if (pos[i] > NUM_LEDS - 1) {
+        pos[i] = NUM_LEDS - 1; // Cap at top
+        rainBounceHeight[i] = 0;
+        rainBounceVelocity[i] = -rainBounceVelocity[i] * 0.5; // Reverse and dampen
+      }
+      
+      // If bounce height goes negative, bounce is done - reset drop to top
+      if (rainBounceHeight[i] <= 0 || pos[i] <= pMax) {
+        // Bounce complete - reset drop to top for next fall
+        rainBouncing[i] = false;
+        rainBounceVelocity[i] = 0;
+        rainBounceHeight[i] = 0;
+        tLast[i] = millis();
+        h[i] = 0;
+        COR[i] = random(2, 12);
+        pos[i] = NUM_LEDS - 1 - COR[i];
+        if (pos[i] < 0) pos[i] = NUM_LEDS - 1;
+      }
     }
   }
   
@@ -1246,8 +1296,8 @@ void displayRain() {
     }
   }
   
-  // Reset water level if it gets too high (matching original: pMax > 40)
-  if(pMax > 40) {
+  // Reset water level if it gets too high (increased from 40 to 80)
+  if(pMax > 80) {
     george = 0;
     pMax = 0;
   }
