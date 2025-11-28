@@ -92,8 +92,8 @@ float tempBounceVelocity = 0; // Current bounce velocity (positive = upward)
 float tempBounceHeight = 0; // Current bounce height from landing position
 unsigned long tempBounceStartTime = 0; // When bounce started
 int tempBounceCount = 0; // Number of bounces
-const float BOUNCE_COEFFICIENT = 0.6f; // Bounce energy retention (0.6 = loses 40% each bounce)
-const float BOUNCE_DAMPING = 0.8f; // Additional damping factor
+const float BOUNCE_COEFFICIENT = 0.8f; // Bounce energy retention (0.8 = loses 20% each bounce) - increased for stronger bounce
+const float BOUNCE_DAMPING = 0.9f; // Additional damping factor - reduced damping for stronger bounce
 const int MAX_BOUNCES = 3; // Maximum number of bounces before settling
 
 // Color palette display variables
@@ -105,6 +105,10 @@ const float PALETTE_TRANSITION_SPEED = 0.0001; // Slow transition (adjust for sp
 unsigned long lastPaletteChange = 0;
 const unsigned long PALETTE_CHANGE_INTERVAL = 120000; // Change palette every 2 minutes
 int paletteOffset = 0; // For animation
+
+bool resetPaletteState = false; // Force palette re-init when switching modes
+
+// Star animation variables removed
 
 // Function to load settings from preferences
 void loadSettings() {
@@ -451,39 +455,55 @@ void loop() {
     cycleInitialized = true;
   }
   
+  // Static flags for tracking temperature display calls
+  static bool firstCallDone = false;
+  static bool secondCallDone = false;
+  
   // Check if it's time for temperature display cycle (every 2 minutes)
   if (currentTime - lastTempCycleStart >= TEMP_DISPLAY_INTERVAL) {
     // Start new temperature cycle
     lastTempCycleStart = currentTime;
-    tempDisplayCount = 0;
     modeSwitchTime = currentTime;
     displayMode = 0; // Switch to temperature
+    // Reset flags for new cycle
+    firstCallDone = false;
+    secondCallDone = false;
     Serial.println("Starting temperature display cycle");
   }
   
-  // If in temperature mode, check if we've shown it twice
+  // If in temperature mode, call displayTemperature() twice
   if (displayMode == 0) {
-    if (tempDisplayCount < 2) {
-      // Still showing temperature
-      if (currentTime - modeSwitchTime > TEMP_DISPLAY_DURATION) {
-        // Done with this temp display, show next one or switch to palette
-        tempDisplayCount++;
-        if (tempDisplayCount < 2) {
-          // Show temp again (second time)
-          modeSwitchTime = currentTime;
-          tempDisplayState = 0; // Reset temp state for second display
-          tempCurrentStack = 0;
-          tempPMax = 0;
-          tempInitialized = false;
-          Serial.println("Showing temperature display again (2nd time)");
+    
+    if (!firstCallDone) {
+      // First call - run until complete
+      if (displayTemperature()) {
+        // First display complete, clear and prepare for second
+        firstCallDone = true;
+        delay(500); // Brief pause between displays
+        Serial.println("First temperature display complete");
+      }
+    } else if (!secondCallDone) {
+      // Second call - run until complete
+      if (displayTemperature()) {
+        // Second display complete, switch to rain if raining, otherwise palette
+        secondCallDone = true;
+        if (isRaining) {
+          displayMode = 1; // Switch to rain mode
+          Serial.println("Second temperature display complete, switching to rain display");
         } else {
-          // Done with both temp displays, switch to color palette
-          displayMode = 2;
-          modeSwitchTime = currentTime;
-          FastLED.clear();
-          FastLED.show();
-          Serial.println("Switching to color palette display");
+          displayMode = 2; // Switch to color palette
+          Serial.println("Second temperature display complete, switching to color palette");
         }
+        modeSwitchTime = currentTime;
+        FastLED.clear();
+        FastLED.show();
+      }
+    } else {
+      // Both displays done, switch to rain if raining, otherwise palette
+      if (isRaining) {
+        displayMode = 1; // Switch to rain mode
+      } else {
+        displayMode = 2; // Switch to color palette
       }
     }
   }
@@ -501,14 +521,18 @@ void loop() {
       tempInitialized = false;
     }
     // Reset rain state when switching away from it
+    // NOTE: pMax and george are NOT reset - they persist so water level accumulates
     if (lastDisplayMode == 1) {
-      pMax = 0;
-      george = 0;
+      // Only reset drop positions, keep pMax and george for accumulation
       for(int i = 0; i < NUM_BALLS; i++) {
         tLast[i] = millis();
         h[i] = 0;
         COR[i] = random(2, 12);
       }
+    }
+    // Reset palette state when switching TO palette mode (force re-initialization)
+    if (displayMode == 2) {
+      resetPaletteState = true; // Force palette to re-initialize
     }
     lastDisplayMode = displayMode;
   }
@@ -638,9 +662,11 @@ void updateWeather() {
     Serial.println("Warning: Temperature is 0, setting default for testing");
     currentTemp = 72.0; // Default temperature for testing
   }
+  isRaining = true;
 }
 
-void displayTemperature() {
+bool displayTemperature() {
+  // Returns true when display is complete, false while still displaying
   int tempInt = (int)currentTemp;
   int tens = tempInt / 10;
   int ones = tempInt % 10;
@@ -674,15 +700,17 @@ void displayTemperature() {
       FastLED.show();
       lastFlash = millis();
     }
-    return;
+    return false; // Error state, still displaying
   }
   
-  // Reset if temperature changed
-  if (tempInt != lastDisplayedTemp) {
+  // Reset if temperature changed OR if lastDisplayedTemp is -1 (forced reset)
+  if (tempInt != lastDisplayedTemp || lastDisplayedTemp == -1) {
     tempDisplayState = 0;
     tempCurrentStack = 0;
     tempPMax = 0;
     tempTLast = millis(); // FIX: Set to current time, not 0
+    tempH = 0;
+    tempPos = NUM_LEDS - 1;
     tempBouncing = false; // Reset bounce state
     tempBounceVelocity = 0;
     tempBounceHeight = 0;
@@ -699,9 +727,10 @@ void displayTemperature() {
     tempTensCount = tens;
     tempOnesCount = ones;
     tempCurrentStack = 0;
-    tempTLast = millis();
+    tempTLast = millis(); // CRITICAL: Set to current time
     tempPMax = 0;
-    tempH = 0;
+    tempH = 0; // Start at top (height = 0)
+    tempPos = NUM_LEDS - 1; // CRITICAL: Start position at top
     tempBouncing = false;
     tempBounceVelocity = 0;
     tempBounceHeight = 0;
@@ -724,27 +753,39 @@ void displayTemperature() {
         leds[i] = CRGB(255, 0, 0);
       }
       FastLED.show();
-      return;
+      return false; // Error state, still displaying
     }
   }
   
-  // Display tens place - falling stacks
+  // Display tens place - falling stacks (EXACT COPY OF ONES PLACE LOGIC)
   if (tempDisplayState == 0) {
     if (tempCurrentStack < tempTensCount) {
       if (!tempBouncing) {
-        // Stack is falling
-        float tCycle = (millis() - tempTLast) / 1000.0; // Convert to seconds
-        tempH = 0.5 * TEMP_GRAVITY * pow(tCycle, 2.0);
-        tempPos = (NUM_LEDS - 1) - (int)(tempH * (NUM_LEDS - 1));
+        // Stack is falling - EXACT COPY OF WORKING ONES CODE
+        unsigned long now = millis();
+        float tempTCycle = (now - tempTLast) / 1000.0; // Convert to seconds (renamed to avoid conflict with rain tCycle array)
         
-        // Ensure tempPos doesn't go below 0
+        // Safety check: if tempTCycle is negative or very large, reset to start at top
+        if (tempTCycle < 0.0 || tempTCycle > 10.0) {
+          tempTLast = now;
+          tempTCycle = 0.0;
+          tempH = 0.0;
+          tempPos = NUM_LEDS - 1;
+        } else {
+          tempH = 0.5 * TEMP_GRAVITY * pow(tempTCycle, 2.0);
+          tempPos = (NUM_LEDS - 1) - (int)(tempH * (NUM_LEDS - 1));
+        }
+        
+        // Ensure tempPos doesn't go below 0 or above top
         if (tempPos < 0) tempPos = 0;
+        if (tempPos > NUM_LEDS - 1) tempPos = NUM_LEDS - 1;
         
         // Stack lands when it reaches the current top of the pile
         if (tempPos <= tempPMax) {
           // Calculate impact velocity for bounce
-          float impactVelocity = TEMP_GRAVITY * tCycle; // Velocity at impact
-          tempBounceVelocity = impactVelocity * BOUNCE_COEFFICIENT * BOUNCE_DAMPING; // Initial bounce velocity
+          // Velocity = gravity * time, scale for LED units (LEDs per second)
+          float impactVelocity = TEMP_GRAVITY * tempTCycle * NUM_LEDS; // Velocity in LED units per second
+          tempBounceVelocity = impactVelocity * BOUNCE_COEFFICIENT * BOUNCE_DAMPING; // Initial bounce velocity (in LED units per second)
           tempBounceHeight = 0;
           tempBounceStartTime = millis();
           tempBounceCount = 0;
@@ -756,18 +797,28 @@ void displayTemperature() {
         float bounceTime = (millis() - tempBounceStartTime) / 1000.0;
         
         // Physics: h = v0*t - 0.5*g*t^2 (upward motion, then gravity pulls down)
-        tempBounceHeight = tempBounceVelocity * bounceTime - 0.5 * TEMP_GRAVITY * pow(bounceTime, 2.0);
+        // tempBounceVelocity is in LED units per second, scale gravity for LED units
+        tempBounceHeight = tempBounceVelocity * bounceTime - 0.5 * TEMP_GRAVITY * NUM_LEDS * pow(bounceTime, 2.0);
         
-        // Convert bounce height to LED position
-        int bounceOffset = (int)(tempBounceHeight * (NUM_LEDS - 1));
+        // Convert bounce height to LED position offset (tempBounceHeight is in LED units)
+        int bounceOffset = (int)tempBounceHeight;
         tempPos = tempPMax + bounceOffset;
+        
+        // CRITICAL: Ensure tempPos doesn't go out of bounds - especially prevent going above top
+        if (tempPos < 0) tempPos = 0;
+        if (tempPos > NUM_LEDS - 1) {
+          tempPos = NUM_LEDS - 1; // Cap at top of column
+          // If we hit the top, reverse the bounce direction
+          tempBounceHeight = 0;
+          tempBounceVelocity = -tempBounceVelocity * 0.5; // Reverse and dampen
+        }
         
         // If bounce height goes negative, we've hit the ground again
         if (tempBounceHeight <= 0 || tempPos <= tempPMax) {
           tempPos = tempPMax; // Snap to landing position
           tempBounceCount++;
           
-          if (tempBounceCount >= MAX_BOUNCES || tempBounceVelocity < 0.5) {
+          if (tempBounceCount >= MAX_BOUNCES || tempBounceVelocity < 2.0) {
             // Done bouncing - settle into position
             tempBouncing = false;
             tempBounceVelocity = 0;
@@ -795,22 +846,32 @@ void displayTemperature() {
             if (tempCurrentStack >= tempTensCount) {
               // All tens stacks done, wait then switch to ones
               delay(2000);
+              
+              // Clear display completely before switching
+              FastLED.clear();
+              FastLED.show();
+              delay(100); // Ensure clear is visible
+              
               tempDisplayState = 1;
               tempCurrentStack = 0;
               tempTLast = millis();
               tempPMax = 0;
+              tempH = 0; // Reset height
+              tempPos = NUM_LEDS - 1; // Reset position to top
               tempBouncing = false;
               tempBounceVelocity = 0;
               tempBounceHeight = 0;
               tempBounceCount = 0;
-              for(int j = 0; j < NUM_LEDS; j++) {
-                leds[j] = CRGB(0, 0, 0);
-              }
+              
+              // Clear again to be sure
+              FastLED.clear();
               FastLED.show();
             } else {
-              // Start next stack falling
+              // Start next stack falling - EXACT COPY OF WORKING ONES CODE
               tempTLast = millis();
               tempBouncing = false;
+              tempH = 0; // Reset height
+              tempPos = NUM_LEDS - 1; // Reset position to top
             }
           } else {
             // Bounce again with reduced velocity
@@ -847,21 +908,42 @@ void displayTemperature() {
   }
   // Display ones place - falling stacks
   else if (tempDisplayState == 1) {
+    // If ones count is 0, immediately go to done state
+    if (tempOnesCount == 0) {
+      tempDisplayState = 2;
+      tempStateTime = millis();
+      FastLED.clear();
+      FastLED.show();
+      return false; // Still displaying (in done state)
+    }
+    
     if (tempCurrentStack < tempOnesCount) {
       if (!tempBouncing) {
         // Stack is falling
-        float tCycle = (millis() - tempTLast) / 1000.0; // Convert to seconds
-        tempH = 0.5 * TEMP_GRAVITY * pow(tCycle, 2.0);
-        tempPos = (NUM_LEDS - 1) - (int)(tempH * (NUM_LEDS - 1));
+        unsigned long now = millis();
+        float tempTCycle = (now - tempTLast) / 1000.0; // Convert to seconds (renamed to avoid conflict with rain tCycle array)
         
-        // Ensure tempPos doesn't go below 0
+        // Safety check: if tempTCycle is negative or very large, reset to start at top
+        if (tempTCycle < 0.0 || tempTCycle > 10.0) {
+          tempTLast = now;
+          tempTCycle = 0.0;
+          tempH = 0.0;
+          tempPos = NUM_LEDS - 1;
+        } else {
+          tempH = 0.5 * TEMP_GRAVITY * pow(tempTCycle, 2.0);
+          tempPos = (NUM_LEDS - 1) - (int)(tempH * (NUM_LEDS - 1));
+        }
+        
+        // Ensure tempPos doesn't go below 0 or above top
         if (tempPos < 0) tempPos = 0;
+        if (tempPos > NUM_LEDS - 1) tempPos = NUM_LEDS - 1;
         
         // Stack lands when it reaches the current top of the pile
         if (tempPos <= tempPMax) {
           // Calculate impact velocity for bounce
-          float impactVelocity = TEMP_GRAVITY * tCycle; // Velocity at impact
-          tempBounceVelocity = impactVelocity * BOUNCE_COEFFICIENT * BOUNCE_DAMPING; // Initial bounce velocity
+          // Velocity = gravity * time, scale for LED units (LEDs per second)
+          float impactVelocity = TEMP_GRAVITY * tempTCycle * NUM_LEDS; // Velocity in LED units per second
+          tempBounceVelocity = impactVelocity * BOUNCE_COEFFICIENT * BOUNCE_DAMPING; // Initial bounce velocity (in LED units per second)
           tempBounceHeight = 0;
           tempBounceStartTime = millis();
           tempBounceCount = 0;
@@ -873,18 +955,28 @@ void displayTemperature() {
         float bounceTime = (millis() - tempBounceStartTime) / 1000.0;
         
         // Physics: h = v0*t - 0.5*g*t^2 (upward motion, then gravity pulls down)
-        tempBounceHeight = tempBounceVelocity * bounceTime - 0.5 * TEMP_GRAVITY * pow(bounceTime, 2.0);
+        // tempBounceVelocity is in LED units per second, scale gravity for LED units
+        tempBounceHeight = tempBounceVelocity * bounceTime - 0.5 * TEMP_GRAVITY * NUM_LEDS * pow(bounceTime, 2.0);
         
-        // Convert bounce height to LED position
-        int bounceOffset = (int)(tempBounceHeight * (NUM_LEDS - 1));
+        // Convert bounce height to LED position offset (tempBounceHeight is in LED units)
+        int bounceOffset = (int)tempBounceHeight;
         tempPos = tempPMax + bounceOffset;
+        
+        // CRITICAL: Ensure tempPos doesn't go out of bounds - especially prevent going above top
+        if (tempPos < 0) tempPos = 0;
+        if (tempPos > NUM_LEDS - 1) {
+          tempPos = NUM_LEDS - 1; // Cap at top of column
+          // If we hit the top, reverse the bounce direction
+          tempBounceHeight = 0;
+          tempBounceVelocity = -tempBounceVelocity * 0.5; // Reverse and dampen
+        }
         
         // If bounce height goes negative, we've hit the ground again
         if (tempBounceHeight <= 0 || tempPos <= tempPMax) {
           tempPos = tempPMax; // Snap to landing position
           tempBounceCount++;
           
-          if (tempBounceCount >= MAX_BOUNCES || tempBounceVelocity < 0.5) {
+          if (tempBounceCount >= MAX_BOUNCES || tempBounceVelocity < 2.0) {
             // Done bouncing - settle into position
             tempBouncing = false;
             tempBounceVelocity = 0;
@@ -919,9 +1011,11 @@ void displayTemperature() {
               tempBounceHeight = 0;
               tempBounceCount = 0;
             } else {
-              // Start next stack falling
+              // Start next stack falling - EXACT COPY OF WORKING ONES CODE
               tempTLast = millis();
               tempBouncing = false;
+              tempH = 0; // Reset height
+              tempPos = NUM_LEDS - 1; // Reset position to top
             }
           } else {
             // Bounce again with reduced velocity
@@ -954,9 +1048,17 @@ void displayTemperature() {
       
       FastLED.show();
       delay(10);
+    } else {
+      // tempCurrentStack >= tempOnesCount but we haven't transitioned to state 2 yet
+      // This can happen if tempOnesCount is 0 or all stacks are done
+      // Transition to done state
+      tempDisplayState = 2;
+      tempStateTime = millis();
+      FastLED.clear();
+      FastLED.show();
     }
   }
-  // Done displaying, hold for a bit then reset
+  // Done displaying, hold for a bit then clear and return
   else if (tempDisplayState == 2) {
     // Continue to display the final stacked state with all green markers
     FastLED.clear();
@@ -973,14 +1075,21 @@ void displayTemperature() {
     FastLED.show();
     
     if (millis() - tempStateTime > 3000) {
-      // Reset for next cycle
+      // Clear output and return true to indicate done
+      FastLED.clear();
+      FastLED.show();
+      // Reset state for next call
       tempDisplayState = 0;
       tempCurrentStack = 0;
       tempPMax = 0;
-      FastLED.clear();
-      FastLED.show();
+      tempInitialized = false;
+      lastDisplayedTemp = -1; // Force re-initialization on next call
+      return true; // Display complete
     }
+    return false; // Still holding
   }
+  
+  return false; // Still displaying
 }
 
 void testRainDisplay() {
@@ -1057,8 +1166,8 @@ void testRainDisplay() {
       }
     }
     
-    // Reset water level if it gets too high (matching original: pMax > 40)
-    if(pMax > 40) {
+    // Reset water level if it gets too high (increased from 40 to 80)
+    if(pMax > 80) {
       george = 0;
       pMax = 0;
     }
@@ -1326,16 +1435,22 @@ void displayColorPalette() {
   static float paletteBlendProgress = 0.0;
   static int paletteOffset = 0;
   static bool initialized = false;
-  
-  unsigned long currentTime = millis();
-  
   // Track palette type (blue or green) for complex alternation
   static bool isBlue = true; // Track current color family
   static int sequenceCount = 0; // For complex patterns
   
+  unsigned long currentTime = millis();
+  
+  // Check if we need to reset (when switching to palette mode)
+  if (resetPaletteState) {
+    initialized = false;
+    resetPaletteState = false;
+  }
+  
   // Initialize on first call
   if (!initialized) {
     lastPaletteChange = currentTime;
+    paletteOffset = 0; // Initialize offset
     // Randomly start with blue or green
     isBlue = random(2) == 0;
     if (isBlue) {
@@ -1346,6 +1461,7 @@ void displayColorPalette() {
     targetPaletteIndex = currentPaletteIndex;
     paletteBlendProgress = 0.0;
     initialized = true;
+    Serial.println("Color palette initialized");
   }
   
   // Slowly change palette every 2 minutes with complex alternation
@@ -1425,29 +1541,21 @@ void displayColorPalette() {
   // Animate palette offset for slow movement
   paletteOffset = (paletteOffset + 1) % 256;
   
-  // Blend the two palettes
+  // Blend the two palettes for base background
   CRGBPalette16 currentPalette = palettes[currentPaletteIndex];
   CRGBPalette16 targetPalette = palettes[targetPaletteIndex];
   
-  // Fill LEDs with blended palette colors
+  // Fill LEDs with base palette colors - CRITICAL: This must run every frame
   for(int i = 0; i < NUM_LEDS; i++) {
-    // Add slow randomness: slight variation in position
-    int position = (i * 8 + paletteOffset + random(-2, 3)) % 256;
+    int position = (i * 8 + paletteOffset) % 256;
     position = constrain(position, 0, 255);
     
-    // Get colors from both palettes
     CRGB color1 = ColorFromPalette(currentPalette, position, 255, LINEARBLEND);
     CRGB color2 = ColorFromPalette(targetPalette, position, 255, LINEARBLEND);
-    
-    // Blend between them
     leds[i] = blend(color1, color2, (uint8_t)(paletteBlendProgress * 255));
-    
-    // Add subtle random variation for texture (very subtle)
-    if (random(100) < 5) { // 5% chance
-      leds[i].fadeToBlackBy(random(5, 15)); // Slight darkening
-    }
   }
   
+  // CRITICAL: Must call show() to display the LEDs
   FastLED.show();
   delay(30); // Smooth animation
 }
