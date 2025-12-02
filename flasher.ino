@@ -64,6 +64,7 @@ bool rainBouncing[NUM_BALLS] = {false, false, false, false, false, false};
 float rainBounceVelocity[NUM_BALLS] = {0, 0, 0, 0, 0, 0};
 float rainBounceHeight[NUM_BALLS] = {0, 0, 0, 0, 0, 0};
 unsigned long rainBounceStartTime[NUM_BALLS] = {0, 0, 0, 0, 0, 0};
+int rainBounceWaterLevel[NUM_BALLS] = {0, 0, 0, 0, 0, 0}; // Water level at time of impact
 const float RAIN_BOUNCE_COEFFICIENT = 0.25f; // Bounce energy retention for rain (smaller bounce)
 
 // Display mode: 0 = temperature, 1 = rain, 2 = color palette
@@ -539,6 +540,7 @@ void loop() {
         rainBounceVelocity[i] = 0;
         rainBounceHeight[i] = 0;
         rainBounceStartTime[i] = 0;
+        rainBounceWaterLevel[i] = 0;
       }
     }
     // Reset palette state when switching TO palette mode (force re-initialization)
@@ -1193,7 +1195,7 @@ void testRainDisplay() {
 }
 
 void displayRain() {
-  // Rain animation with single bounce when hitting water
+  // Rain animation with single bounce when hitting water (using temperature bounce physics)
   for(int i = 0; i < NUM_BALLS; i++) {
     if (!rainBouncing[i]) {
       // Drop is falling
@@ -1212,46 +1214,51 @@ void displayRain() {
       }
       
       // Check if drop hits water level - if so, start bounce
-      if (pos[i] <= pMax && pos[i] >= 0) {
-        // Calculate impact velocity for bounce
+      // Only trigger if drop is at or below water level and wasn't already bouncing
+      if (pos[i] <= pMax && pos[i] >= 0 && !rainBouncing[i]) {
+        // Store the water level at impact (before incrementing)
+        rainBounceWaterLevel[i] = pMax;
+        
+        // Calculate impact velocity for bounce (reduced energy for rain)
+        // Velocity = gravity * time, scale for LED units (LEDs per second)
         float impactVelocity = GRAVITY[i] * (tCycle[i] / RAIN_TIME_SCALE) * NUM_LEDS; // Velocity in LED units per second
-        rainBounceVelocity[i] = impactVelocity * RAIN_BOUNCE_COEFFICIENT; // Initial bounce velocity
+        rainBounceVelocity[i] = impactVelocity * BOUNCE_COEFFICIENT * BOUNCE_DAMPING * RAIN_BOUNCE_COEFFICIENT; // Reduced bounce energy for rain
         rainBounceHeight[i] = 0;
         rainBounceStartTime[i] = millis();
         rainBouncing[i] = true;
-        pos[i] = pMax; // Set to water level
+        pos[i] = rainBounceWaterLevel[i]; // Set to water level at impact
         
-        // Add to water level
+        // Add to water level (this happens after storing the impact level)
         george = george + 1;
         pMax = round(george / 10);
       }
     } else {
-      // Drop is bouncing
+      // Drop is bouncing - use same physics as temperature bounce
       float bounceTime = (millis() - rainBounceStartTime[i]) / 1000.0;
       
       // Physics: h = v0*t - 0.5*g*t^2 (upward motion, then gravity pulls down)
-      // Use average gravity for bounce calculation
+      // Use average gravity scaled for LED units (same as temperature)
       float avgGravity = 1.0; // Average of GRAVITY array
       rainBounceHeight[i] = rainBounceVelocity[i] * bounceTime - 0.5 * avgGravity * NUM_LEDS * pow(bounceTime, 2.0);
       
-      // Convert bounce height to LED position offset
+      // Convert bounce height to LED position offset (rainBounceHeight is in LED units)
       int bounceOffset = (int)rainBounceHeight[i];
-      // Limit upward bounce height so drops don't shoot too far up
-      if (bounceOffset > 10) bounceOffset = 10;
-      if (bounceOffset < -10) bounceOffset = -10;
-      pos[i] = pMax + bounceOffset;
+      pos[i] = rainBounceWaterLevel[i] + bounceOffset;
       
-      // Ensure tempPos doesn't go out of bounds
+      // CRITICAL: Ensure pos doesn't go out of bounds - especially prevent going above top
       if (pos[i] < 0) pos[i] = 0;
       if (pos[i] > NUM_LEDS - 1) {
-        pos[i] = NUM_LEDS - 1; // Cap at top
+        pos[i] = NUM_LEDS - 1; // Cap at top of column
+        // If we hit the top, reverse the bounce direction
         rainBounceHeight[i] = 0;
         rainBounceVelocity[i] = -rainBounceVelocity[i] * 0.5; // Reverse and dampen
       }
       
-      // If bounce height goes negative, bounce is done - reset drop to top
-      if (rainBounceHeight[i] <= 0 || pos[i] <= pMax) {
-        // Bounce complete - reset drop to top for next fall
+      // If bounce height goes negative, we've hit the water again - bounce is done
+      if (rainBounceHeight[i] <= 0 || pos[i] <= rainBounceWaterLevel[i]) {
+        pos[i] = rainBounceWaterLevel[i]; // Snap to water level
+        
+        // Single bounce complete - reset drop to top for next fall
         rainBouncing[i] = false;
         rainBounceVelocity[i] = 0;
         rainBounceHeight[i] = 0;
