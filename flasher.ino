@@ -1219,10 +1219,11 @@ void displayRain() {
         // Store the water level at impact (before incrementing)
         rainBounceWaterLevel[i] = pMax;
         
-        // Calculate impact velocity for bounce (reduced energy for rain)
+        // Calculate impact velocity for bounce (normalized to match temperature)
+        // Use TEMP_GRAVITY instead of GRAVITY[i] to ensure consistent bounce behavior
         // Velocity = gravity * time, scale for LED units (LEDs per second)
-        float impactVelocity = GRAVITY[i] * (tCycle[i] / RAIN_TIME_SCALE) * NUM_LEDS; // Velocity in LED units per second
-        rainBounceVelocity[i] = impactVelocity * BOUNCE_COEFFICIENT * BOUNCE_DAMPING * RAIN_BOUNCE_COEFFICIENT; // Reduced bounce energy for rain
+        float impactVelocity = TEMP_GRAVITY * (tCycle[i] / RAIN_TIME_SCALE) * NUM_LEDS; // Velocity in LED units per second (using TEMP_GRAVITY)
+        rainBounceVelocity[i] = impactVelocity * BOUNCE_COEFFICIENT * BOUNCE_DAMPING; // Same as temperature bounce
         rainBounceHeight[i] = 0;
         rainBounceStartTime[i] = millis();
         rainBouncing[i] = true;
@@ -1237,9 +1238,8 @@ void displayRain() {
       float bounceTime = (millis() - rainBounceStartTime[i]) / 1000.0;
       
       // Physics: h = v0*t - 0.5*g*t^2 (upward motion, then gravity pulls down)
-      // Use average gravity scaled for LED units (same as temperature)
-      float avgGravity = 1.0; // Average of GRAVITY array
-      rainBounceHeight[i] = rainBounceVelocity[i] * bounceTime - 0.5 * avgGravity * NUM_LEDS * pow(bounceTime, 2.0);
+      // Use TEMP_GRAVITY scaled for LED units (same as temperature bounce)
+      rainBounceHeight[i] = rainBounceVelocity[i] * bounceTime - 0.5 * TEMP_GRAVITY * NUM_LEDS * pow(bounceTime, 2.0);
       
       // Convert bounce height to LED position offset (rainBounceHeight is in LED units)
       int bounceOffset = (int)rainBounceHeight[i];
