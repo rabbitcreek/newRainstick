@@ -296,7 +296,7 @@ void setup() {
     
     // Flash LEDs red to indicate reset
     FastLED.addLeds<LED_TYPE, DATA_PIN, COLOR_ORDER>(leds, NUM_LEDS);
-    FastLED.setBrightness(100);
+    FastLED.setBrightness(250);
     for(int i = 0; i < 5; i++) {
       for(int j = 0; j < NUM_LEDS; j++) {
         leds[j] = CRGB(255, 0, 0); // Red
@@ -321,7 +321,7 @@ void setup() {
   
   // Initialize FastLED
   FastLED.addLeds<LED_TYPE, DATA_PIN, COLOR_ORDER>(leds, NUM_LEDS);
-  FastLED.setBrightness(100);
+  FastLED.setBrightness(250);
   FastLED.clear();
   FastLED.show();
   
