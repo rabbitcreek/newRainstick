@@ -81,7 +81,7 @@ unsigned long testRainStartTime = 0;
 const unsigned long TEST_RAIN_DURATION = 15000; // Show rain for 15 seconds
 
 // Temperature falling animation variables
-int tempDisplayState = 0; // 0 = showing tens, 1 = showing ones, 2 = done
+int tempDisplayState = 0; // 0 = showing tens, 1 = showing ones, 2 = done, 3 = draining final, 4 = draining tens
 unsigned long tempStateTime = 0;
 int tempTensCount = 0;
 int tempOnesCount = 0;
@@ -102,7 +102,7 @@ unsigned long tempBounceStartTime = 0; // When bounce started
 int tempBounceCount = 0; // Number of bounces
 const float BOUNCE_COEFFICIENT = 0.8f; // Bounce energy retention (0.8 = loses 20% each bounce) - increased for stronger bounce
 const float BOUNCE_DAMPING = 0.9f; // Additional damping factor - reduced damping for stronger bounce
-const int MAX_BOUNCES = 3; // Maximum number of bounces before settling
+const int MAX_BOUNCES = 2; // Maximum number of bounces before settling
 
 // Color palette display variables
 unsigned long paletteStartTime = 0;
@@ -366,10 +366,6 @@ void setup() {
     // Connect to WiFi
     connectWiFi();
     
-    // Test rain display
-    Serial.println("Testing rain display...");
-    testRainDisplay();
-    delay(1000);
     
     // Get initial weather data
     Serial.println("Fetching initial weather data...");
@@ -485,15 +481,16 @@ void loop() {
     if (!firstCallDone) {
       // First call - run until complete
       if (displayTemperature()) {
-        // First display complete, clear and prepare for second
+        // First display complete (drain animation finished), prepare for second
         firstCallDone = true;
         delay(500); // Brief pause between displays
         Serial.println("First temperature display complete");
+        // Don't clear here - drain animation already cleared
       }
     } else if (!secondCallDone) {
       // Second call - run until complete
       if (displayTemperature()) {
-        // Second display complete, switch to rain if raining, otherwise palette
+        // Second display complete (drain animation finished), switch to rain if raining, otherwise palette
         secondCallDone = true;
         if (isRaining) {
           displayMode = 1; // Switch to rain mode
@@ -503,8 +500,7 @@ void loop() {
           Serial.println("Second temperature display complete, switching to color palette");
         }
         modeSwitchTime = currentTime;
-        FastLED.clear();
-        FastLED.show();
+        // Don't clear here - drain animation already cleared
       }
     } else {
       // Both displays done, switch to rain if raining, otherwise palette
@@ -857,28 +853,12 @@ bool displayTemperature() {
             FastLED.show();
             
             if (tempCurrentStack >= tempTensCount) {
-              // All tens stacks done, wait then switch to ones
+              // All tens stacks done, wait then start drain animation
               delay(2000);
               
-              // Clear display completely before switching
-              FastLED.clear();
-              FastLED.show();
-              delay(100); // Ensure clear is visible
-              
-              tempDisplayState = 1;
-              tempCurrentStack = 0;
-              tempTLast = millis();
-              tempPMax = 0;
-              tempH = 0; // Reset height
-              tempPos = NUM_LEDS - 1; // Reset position to top
-              tempBouncing = false;
-              tempBounceVelocity = 0;
-              tempBounceHeight = 0;
-              tempBounceCount = 0;
-              
-              // Clear again to be sure
-              FastLED.clear();
-              FastLED.show();
+              // Start tens drain animation (keep current display visible)
+              tempDisplayState = 4;
+              tempStateTime = millis();
             } else {
               // Start next stack falling - EXACT COPY OF WORKING ONES CODE
               tempTLast = millis();
@@ -1088,7 +1068,21 @@ bool displayTemperature() {
     FastLED.show();
     
     if (millis() - tempStateTime > 3000) {
-      // Clear output and return true to indicate done
+      // Start drain animation
+      tempDisplayState = 3;
+      tempStateTime = millis();
+    }
+    return false; // Still holding
+  }
+  else if (tempDisplayState == 3) {
+    // Drain animation: stack moves downward and disappears at bottom (like a snake)
+    unsigned long drainStartTime = tempStateTime;
+    unsigned long currentTime = millis();
+    unsigned long drainDuration = 2000; // 2 seconds for drain
+    unsigned long elapsed = currentTime - drainStartTime;
+    
+    if (elapsed >= drainDuration) {
+      // Drain complete - clear and return true
       FastLED.clear();
       FastLED.show();
       // Reset state for next call
@@ -1099,99 +1093,89 @@ bool displayTemperature() {
       lastDisplayedTemp = -1; // Force re-initialization on next call
       return true; // Display complete
     }
-    return false; // Still holding
-  }
-  
-  return false; // Still displaying
-}
-
-void testRainDisplay() {
-  // Initialize rain test variables
-  for(int i = 0; i < NUM_BALLS; i++) {
-    tLast[i] = millis();
-    h[i] = 0;
-    COR[i] = random(2, 12);
-    // GRAVITY is already initialized with array values
-  }
-  pMax = 0;
-  george = 0;
-  
-  // Run rain animation for 8 seconds (longer to see bounce effect)
-  unsigned long testStart = millis();
-  unsigned long testDuration = 8000; // 8 seconds
-  
-  while (millis() - testStart < testDuration) {
-    // Rain animation matching original (no bounce)
-    for(int i = 0; i < NUM_BALLS; i++) {
-      tCycle[i] = millis() - tLast[i];
-      h[i] = 0.5 * GRAVITY[i] * pow(tCycle[i] / RAIN_TIME_SCALE, 2.0);
-      // Drops fall from top down to bottom (matching original calculation style)
-      pos[i] = (NUM_LEDS - (round(h[i] * NUM_LEDS))) - COR[i];
+    
+    // Calculate how far the stack has moved down (0 to tempPMax)
+    float progress = (float)elapsed / (float)drainDuration; // 0.0 to 1.0
+    int drainOffset = (int)(progress * tempPMax); // How many LEDs have drained from bottom
+    
+    FastLED.clear();
+    
+    // Draw the stack shifted downward - remaining LEDs move down
+    int remainingHeight = tempPMax - drainOffset; // Height of remaining stack
+    for(int j = 0; j < remainingHeight && j < NUM_LEDS; j++) {
+      int ledPos = j; // Position on LED strip (starts at bottom)
       
-      // Ensure position is within bounds
-      if (pos[i] < 0) pos[i] = 0;
-      if (pos[i] >= NUM_LEDS) pos[i] = NUM_LEDS - 1;
+      // Blue background
+      leds[ledPos] = CRGB(0, 0, 250);
       
-      // Check if drop hits water level - if so, reset and add to water
-      if (pos[i] <= pMax && pos[i] >= 0) {
-        tLast[i] = millis();
-        george = george + 1;
-        pMax = round(george / 10);
-        
-        // Reset drop to top for next fall
-        h[i] = 0;
-        COR[i] = random(2, 12);
-        // Immediately set position to top for next frame
-        pos[i] = NUM_LEDS - 1 - COR[i];
-        if (pos[i] < 0) pos[i] = NUM_LEDS - 1;
-      }
-    }
-    
-    // Background color (dark blue-green) - fill all LEDs
-    for(int i = 0; i < NUM_LEDS; i++) {
-      leds[i] = CRGB(0, 25, 12);
-    }
-    
-    // Water level at bottom (cyan/blue) - only in bottom area
-    for(int i = 0; i < pMax && i < NUM_LEDS; i++) {
-      leds[i] = CRGB(0, 255, i * 4);
-    }
-    
-    // Falling raindrops (green and blue like original) - can appear anywhere
-    for(int i = 0; i < NUM_BALLS; i++) {
-      if (pos[i] >= 0 && pos[i] < NUM_LEDS) {
-        leds[pos[i]] = CRGB(0, 255, 0);        // Green
-        if (pos[i] + 1 < NUM_LEDS) {
-          leds[pos[i] + 1] = CRGB(0, 25, 255);  // Blue (matching original)
-        }
+      // Green markers every 5 LEDs (maintain spacing as stack moves down)
+      // Original marker positions were at 0, 5, 10, 15... in the original stack
+      // As stack moves down, markers at original positions 0, 5, 10... drain out
+      // Remaining markers are at positions that were drainOffset+5, drainOffset+10, etc.
+      int originalPos = j + drainOffset; // Original position in the stack
+      if (originalPos % 5 == 0) {
+        leds[ledPos] = CRGB(0, 255, 0); // Green marker
       }
     }
     
     FastLED.show();
+    return false; // Still draining
+  }
+  else if (tempDisplayState == 4) {
+    // Tens drain animation: stack moves downward and disappears at bottom (like a snake)
+    unsigned long drainStartTime = tempStateTime;
+    unsigned long currentTime = millis();
+    unsigned long drainDuration = 2000; // 2 seconds for drain
+    unsigned long elapsed = currentTime - drainStartTime;
     
-    // Clear raindrops for next frame
-    for(int i = 0; i < NUM_BALLS; i++) {
-      if (pos[i] >= 0 && pos[i] < NUM_LEDS) {
-        leds[pos[i]] = CRGB(0, 0, 0);
-        if (pos[i] + 1 < NUM_LEDS) {
-          leds[pos[i] + 1] = CRGB(0, 0, 0);
-        }
+    if (elapsed >= drainDuration) {
+      // Tens drain complete - clear and switch to ones place
+      FastLED.clear();
+      FastLED.show();
+      
+      // Reset for ones place
+      tempDisplayState = 1;
+      tempCurrentStack = 0;
+      tempTLast = millis();
+      tempPMax = 0;
+      tempH = 0; // Reset height
+      tempPos = NUM_LEDS - 1; // Reset position to top
+      tempBouncing = false;
+      tempBounceVelocity = 0;
+      tempBounceHeight = 0;
+      tempBounceCount = 0;
+      return false; // Continue to ones place
+    }
+    
+    // Calculate how far the stack has moved down (0 to tempPMax)
+    float progress = (float)elapsed / (float)drainDuration; // 0.0 to 1.0
+    int drainOffset = (int)(progress * tempPMax); // How many LEDs have drained from bottom
+    
+    FastLED.clear();
+    
+    // Draw the stack shifted downward - remaining LEDs move down
+    int remainingHeight = tempPMax - drainOffset; // Height of remaining stack
+    for(int j = 0; j < remainingHeight && j < NUM_LEDS; j++) {
+      int ledPos = j; // Position on LED strip (starts at bottom)
+      
+      // Red background (tens place uses red)
+      leds[ledPos] = CRGB(250, 0, 0);
+      
+      // Green markers every 5 LEDs (maintain spacing as stack moves down)
+      // Original marker positions were at 0, 5, 10, 15... in the original stack
+      // As stack moves down, markers at original positions 0, 5, 10... drain out
+      // Remaining markers are at positions that were drainOffset+5, drainOffset+10, etc.
+      int originalPos = j + drainOffset; // Original position in the stack
+      if (originalPos % 5 == 0) {
+        leds[ledPos] = CRGB(0, 100, 0); // Green marker (darker green for tens)
       }
     }
     
-    // Reset water level if it gets too high (increased from 40 to 80)
-    if(pMax > 80) {
-      george = 0;
-      pMax = 0;
-    }
-    
-    delay(50);
+    FastLED.show();
+    return false; // Still draining
   }
   
-  // Clear after test
-  FastLED.clear();
-  FastLED.show();
-  Serial.println("Rain test complete");
+  return false; // Still displaying
 }
 
 void displayRain() {
@@ -1227,7 +1211,7 @@ void displayRain() {
         rainBounceHeight[i] = 0;
         rainBounceStartTime[i] = millis();
         rainBouncing[i] = true;
-        pos[i] = rainBounceWaterLevel[i]; // Set to water level at impact
+        pos[i]  = rainBounceWaterLevel[i]; // Set to water level at impact
         
         // Add to water level (this happens after storing the impact level)
         george = george + 1;
