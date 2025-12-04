@@ -92,7 +92,7 @@ int tempPos = 0;
 int tempPMax = 0;
 int lastDisplayedTemp = -1; // Track last displayed temperature to detect changes
 bool tempInitialized = false; // Track if temperature display has been initialized
-const float TEMP_GRAVITY = 0.250f; // Slower gravity for temperature drops (halved again from 0.375)
+const float TEMP_GRAVITY = 0.1f; // Slower gravity for temperature drops (halved again from 0.375)
 
 // Bounce physics variables
 bool tempBouncing = false; // Is current stack bouncing?
@@ -1304,7 +1304,7 @@ void displayRain() {
   }
   
   // Reset water level if it gets too high (increased from 40 to 80)
-  if(pMax > 80) {
+  if(pMax > 5) {
     george = 0;
     pMax = 0;
   }
