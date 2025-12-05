@@ -1288,7 +1288,7 @@ void displayRain() {
   }
   
   // Reset water level if it gets too high (increased from 40 to 80)
-  if(pMax > 5) {
+  if(pMax > 60) {
     george = 0;
     pMax = 0;
   }
