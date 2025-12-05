@@ -76,7 +76,7 @@ int tempDisplayCount = 0; // Track how many temp displays in current cycle
 unsigned long lastTempCycleStart = 0;
 
 // Temporary test mode - set to true to force rain display for testing
-const bool TEST_RAIN_MODE = true; // Set to false to disable after testing
+const bool TEST_RAIN_MODE = false; // Disable test rain mode by default
 unsigned long testRainStartTime = 0;
 const unsigned long TEST_RAIN_DURATION = 15000; // Show rain for 15 seconds
 
@@ -462,17 +462,23 @@ void loop() {
   // Static flags for tracking temperature display calls
   static bool firstCallDone = false;
   static bool secondCallDone = false;
+  static bool tempCycleStarted = false; // Track if we've started a temperature cycle
   
   // Check if it's time for temperature display cycle (every 2 minutes)
-  if (currentTime - lastTempCycleStart >= TEMP_DISPLAY_INTERVAL) {
-    // Start new temperature cycle
-    lastTempCycleStart = currentTime;
-    modeSwitchTime = currentTime;
-    displayMode = 0; // Switch to temperature
-    // Reset flags for new cycle
-    firstCallDone = false;
-    secondCallDone = false;
-    Serial.println("Starting temperature display cycle");
+  // Only check when NOT in temperature mode (prevents timer from retriggering during display)
+  if (displayMode != 0 && !tempCycleStarted) {
+    if (currentTime - lastTempCycleStart >= TEMP_DISPLAY_INTERVAL) {
+      // Start new temperature cycle
+      lastTempCycleStart = currentTime;
+      modeSwitchTime = currentTime;
+      displayMode = 0; // Switch to temperature
+      // Reset flags for new cycle
+      firstCallDone = false;
+      secondCallDone = false;
+      tempCycleStarted = true; // Mark that cycle has started
+      lastDisplayedTemp = -1; // Force reset for new cycle
+      Serial.println("Starting temperature display cycle");
+    }
   }
   
   // If in temperature mode, call displayTemperature() twice
@@ -492,6 +498,8 @@ void loop() {
       if (displayTemperature()) {
         // Second display complete (drain animation finished), switch to rain if raining, otherwise palette
         secondCallDone = true;
+        tempCycleStarted = false; // Cycle complete, can start timer for next cycle
+        lastTempCycleStart = currentTime; // Start timer NOW (after both displays complete)
         if (isRaining) {
           displayMode = 1; // Switch to rain mode
           Serial.println("Second temperature display complete, switching to rain display");
@@ -523,6 +531,7 @@ void loop() {
       tempCurrentStack = 0;
       tempPMax = 0;
       tempInitialized = false;
+      lastDisplayedTemp = -1; // Reset temperature tracking when leaving temp mode
     }
     // Reset rain state when switching away from it
     // NOTE: pMax and george are NOT reset - they persist so water level accumulates
@@ -671,7 +680,7 @@ void updateWeather() {
     Serial.println("Warning: Temperature is 0, setting default for testing");
     currentTemp = 72.0; // Default temperature for testing
   }
-  isRaining = true;
+  //isRaining = true;
 }
 
 bool displayTemperature() {
@@ -712,8 +721,13 @@ bool displayTemperature() {
     return false; // Error state, still displaying
   }
   
-  // Reset if temperature changed OR if lastDisplayedTemp is -1 (forced reset)
-  if (tempInt != lastDisplayedTemp || lastDisplayedTemp == -1) {
+  // Reset only when we're at the start of a cycle (not mid-animation) AND
+  // the temperature changed or we've been asked to force a reset.
+  // This avoids a new weather update from interrupting an in-progress display.
+  // IMPORTANT: Only reset if lastDisplayedTemp is -1 (forced reset) OR if temperature actually changed
+  // If lastDisplayedTemp == tempInt, we're displaying the same temp again (second display), so don't reset
+  if ((lastDisplayedTemp == -1 || (tempInt != lastDisplayedTemp && lastDisplayedTemp != -1)) &&
+      tempDisplayState == 0 && tempCurrentStack == 0 && !tempBouncing) {
     tempDisplayState = 0;
     tempCurrentStack = 0;
     tempPMax = 0;
@@ -1085,12 +1099,13 @@ bool displayTemperature() {
       // Drain complete - clear and return true
       FastLED.clear();
       FastLED.show();
-      // Reset state for next call
+      // Reset state for next call (but keep lastDisplayedTemp so second display uses same temp)
       tempDisplayState = 0;
       tempCurrentStack = 0;
       tempPMax = 0;
       tempInitialized = false;
-      lastDisplayedTemp = -1; // Force re-initialization on next call
+      // DON'T reset lastDisplayedTemp here - keep it so second display uses same temperature
+      // Only reset lastDisplayedTemp when switching away from temperature mode
       return true; // Display complete
     }
     
