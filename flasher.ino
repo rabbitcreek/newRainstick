@@ -181,7 +181,7 @@ void saveSettings(String ssid, String password, String locationId, String apiKey
 String getConfigHTML() {
   String html = "<!DOCTYPE html><html><head>";
   html += "<meta name='viewport' content='width=device-width, initial-scale=1'>";
-  html += "<title>ESP32 Weather Config</title>";
+  html += "<title>Seans Rainstick</title>";
   html += "<style>";
   html += "body { font-family: Arial, sans-serif; max-width: 500px; margin: 50px auto; padding: 20px; background: #f5f5f5; }";
   html += "h1 { color: #333; text-align: center; }";
@@ -192,16 +192,16 @@ String getConfigHTML() {
   html += "input[type='submit']:hover { background: #45a049; }";
   html += ".info { background: #e7f3ff; padding: 10px; border-radius: 5px; margin-bottom: 15px; font-size: 14px; color: #0066cc; }";
   html += "</style></head><body>";
-  html += "<h1>🌤️ Weather Display Configuration</h1>";
+  html += "<h1>Seans Rainstick</h1>";
   html += "<div class='info'>Connect your device to WiFi and configure weather location.</div>";
   html += "<form action='/save' method='POST'>";
   html += "<label for='ssid'>WiFi Network Name (SSID):</label>";
   html += "<input type='text' id='ssid' name='ssid' required placeholder='Your WiFi network name'>";
   html += "<label for='password'>WiFi Password:</label>";
   html += "<input type='password' id='password' name='password' placeholder='Your WiFi password'>";
-  html += "<label for='location'>Weather Location ID:</label>";
-  html += "<input type='text' id='location' name='location' required placeholder='e.g., 5879400 (Anchorage, AK)'>";
-  html += "<div class='info' style='margin-top: 10px;'>Find your location ID at <a href='https://openweathermap.org/find' target='_blank'>openweathermap.org/find</a></div>";
+  html += "<label for='location'>US ZIP Code:</label>";
+  html += "<input type='text' id='location' name='location' required placeholder='e.g., 99501'>";
+  html += "<div class='info' style='margin-top: 10px;'>Enter a 5-digit US ZIP code (e.g., 99501 for Anchorage, AK).</div>";
   html += "<label for='apikey'>API Key (optional, leave blank to use default):</label>";
   html += "<input type='text' id='apikey' name='apikey' placeholder='Your OpenWeatherMap API key'>";
   html += "<input type='submit' value='Save Configuration'>";
@@ -296,7 +296,7 @@ void setup() {
     
     // Flash LEDs red to indicate reset
     FastLED.addLeds<LED_TYPE, DATA_PIN, COLOR_ORDER>(leds, NUM_LEDS);
-    FastLED.setBrightness(250);
+    FastLED.setBrightness(125);
     for(int i = 0; i < 5; i++) {
       for(int j = 0; j < NUM_LEDS; j++) {
         leds[j] = CRGB(255, 0, 0); // Red
@@ -321,7 +321,7 @@ void setup() {
   
   // Initialize FastLED
   FastLED.addLeds<LED_TYPE, DATA_PIN, COLOR_ORDER>(leds, NUM_LEDS);
-  FastLED.setBrightness(250);
+  FastLED.setBrightness(125);
   FastLED.clear();
   FastLED.show();
   
@@ -602,8 +602,10 @@ void updateWeather() {
   }
   
   HTTPClient http;
-  String url = "http://api.openweathermap.org/data/2.5/weather?id=" + 
-               OPEN_WEATHER_MAP_LOCATION_ID + 
+  // Use U.S. ZIP code instead of city ID. Expected format: 5-digit ZIP.
+  // OpenWeatherMap requires "zip={zip},us".
+  String url = "http://api.openweathermap.org/data/2.5/weather?zip=" + 
+               OPEN_WEATHER_MAP_LOCATION_ID + ",us" + 
                "&appid=" + OPEN_WEATHER_MAP_API_KEY + 
                "&units=" + OPEN_WEATHER_MAP_UNITS;
   
